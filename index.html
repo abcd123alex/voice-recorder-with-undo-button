@@ -60,6 +60,14 @@
         <span class="font-medium text-xs">Skip single confirmations</span>
       </label>
 
+      <!-- Mic Selector -->
+      <div class="flex items-center space-x-1.5 bg-slate-800 p-1 rounded-lg border border-slate-700">
+        <i data-lucide="mic" class="w-3.5 h-3.5 text-slate-400 ml-1"></i>
+        <select id="micSelect" class="bg-transparent text-xs text-slate-200 font-semibold focus:outline-none px-1 cursor-pointer w-32 truncate" title="Select Microphone">
+          <option value="" class="bg-slate-900 text-white">Default Mic</option>
+        </select>
+      </div>
+
       <!-- Export Selector & Button -->
       <div class="flex items-center space-x-1.5 bg-slate-800 p-1 rounded-lg border border-slate-700">
         <select id="exportFormat" class="bg-transparent text-xs text-slate-200 font-semibold focus:outline-none px-1 cursor-pointer">
@@ -379,6 +387,92 @@
         }
       });
     }
+    
+    // Audio Persistence via IndexedDB
+    function saveAudioToDB() {
+      if (!db) return;
+      try {
+        const tx = db.transaction('session', 'readwrite');
+        const store = tx.objectStore('session');
+        
+        const serializedClips = blockClips.map(clip => {
+          const channels = [];
+          for (let i = 0; i < clip.buffer.numberOfChannels; i++) {
+            channels.push(clip.buffer.getChannelData(i));
+          }
+          return {
+            id: clip.id,
+            blockIndex: clip.blockIndex,
+            sampleRate: clip.buffer.sampleRate,
+            length: clip.buffer.length,
+            channels: channels
+          };
+        });
+
+        store.put({
+          id: 'current_audio',
+          clips: serializedClips
+        });
+      } catch(e) { console.error("Could not save audio to DB", e); }
+    }
+
+    async function loadAudioFromDB() {
+      return new Promise((resolve) => {
+        if (!db) return resolve([]);
+        try {
+          const tx = db.transaction('session', 'readonly');
+          const store = tx.objectStore('session');
+          const req = store.get('current_audio');
+          req.onsuccess = () => {
+            if (req.result && req.result.clips) {
+              initAudioContext();
+              const loadedClips = req.result.clips.map(c => {
+                const buffer = audioCtx.createBuffer(c.channels.length, c.length, c.sampleRate);
+                for (let i = 0; i < c.channels.length; i++) {
+                  buffer.getChannelData(i).set(c.channels[i]);
+                }
+                return { id: c.id, blockIndex: c.blockIndex, buffer: buffer };
+              });
+              resolve(loadedClips);
+            } else {
+              resolve([]);
+            }
+          };
+          req.onerror = () => resolve([]);
+        } catch (e) {
+          resolve([]);
+        }
+      });
+    }
+
+    // Microphone population
+    async function populateMicSelect() {
+      try {
+        // Ping for permission to get real device names instead of generic blanks
+        await navigator.mediaDevices.getUserMedia({ audio: true }).then(s => s.getTracks().forEach(t => t.stop())).catch(e => console.warn(e));
+        
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devices.filter(device => device.kind === 'audioinput');
+        const micSelect = document.getElementById('micSelect');
+        if (!micSelect) return;
+        
+        micSelect.innerHTML = '';
+        if (audioInputs.length === 0) {
+          micSelect.innerHTML = '<option value="" class="bg-slate-900 text-white">Default Mic</option>';
+          return;
+        }
+        
+        audioInputs.forEach((device, index) => {
+          const option = document.createElement('option');
+          option.value = device.deviceId;
+          option.className = "bg-slate-900 text-white";
+          option.text = device.label || `Microphone ${index + 1}`;
+          micSelect.appendChild(option);
+        });
+      } catch (e) {
+        console.error("Error enumerating devices:", e);
+      }
+    }
 
     function showAutosaveStatus(isSaving, text) {
       const dot = document.getElementById('autosaveDot');
@@ -568,8 +662,24 @@
       if (audioCtx.state === 'suspended') await audioCtx.resume();
       if (isPlaying) stopAudio();
       
+      const micSelect = document.getElementById('micSelect');
+      const selectedDeviceId = micSelect ? micSelect.value : null;
+
+      // Noise cancellation + device selection
+      const constraints = {
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      };
+      
+      if (selectedDeviceId) {
+        constraints.audio.deviceId = { exact: selectedDeviceId };
+      }
+
       try {
-        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
         micStreamSource = audioCtx.createMediaStreamSource(mediaStream);
         analyserNode = audioCtx.createAnalyser();
         analyserNode.fftSize = 2048;
@@ -624,6 +734,7 @@
         showToast("Recording...", "info");
       } catch (err) {
         showToast("Microphone access denied or not available", "error");
+        console.error(err);
       }
     }
 
@@ -657,7 +768,6 @@
       let startPos = playheadTime;
       let duration = mainAudioBuffer.duration - startPos;
 
-      // Play specific block if one block is selected and playhead is outside it
       if (selectedBlockIndices.size === 1) {
           const idx = Array.from(selectedBlockIndices)[0];
           const clip = blockClips.find(c => c.blockIndex === idx);
@@ -903,11 +1013,72 @@
       }
     }
 
+    // Advanced WAV Encoder helpers
+    function encodeWAV(samples, sampleRate, numChannels) {
+      let buffer = new ArrayBuffer(44 + samples.length * 2);
+      let view = new DataView(buffer);
+
+      function writeString(view, offset, string) {
+        for (let i = 0; i < string.length; i++) {
+          view.setUint8(offset + i, string.charCodeAt(i));
+        }
+      }
+
+      writeString(view, 0, 'RIFF');
+      view.setUint32(4, 36 + samples.length * 2, true);
+      writeString(view, 8, 'WAVE');
+      writeString(view, 12, 'fmt ');
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true); // PCM Format
+      view.setUint16(22, numChannels, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * numChannels * 2, true);
+      view.setUint16(32, numChannels * 2, true);
+      view.setUint16(34, 16, true); // 16 bit
+      writeString(view, 36, 'data');
+      view.setUint32(40, samples.length * 2, true);
+
+      let offset = 44;
+      for (let i = 0; i < samples.length; i++, offset += 2) {
+        let s = Math.max(-1, Math.min(1, samples[i]));
+        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+      }
+      return buffer;
+    }
+
     function exportWavFile() {
-      // Basic WAV exporter wrapper
-      showToast('WAV export not fully optimized in standard view, generating...', 'info');
-      // Uses previous WAV format function implicitly available or fallbacks
-      setTimeout(()=> showToast('Mock WAV exported', 'success'), 1000);
+      if (!mainAudioBuffer) return;
+      showToast('Generating WAV file...', 'info');
+
+      let numChannels = mainAudioBuffer.numberOfChannels;
+      let sampleRate = mainAudioBuffer.sampleRate;
+      let result;
+
+      // Interleave channels if stereo
+      if (numChannels === 2) {
+        let inputL = mainAudioBuffer.getChannelData(0);
+        let inputR = mainAudioBuffer.getChannelData(1);
+        let length = inputL.length + inputR.length;
+        result = new Float32Array(length);
+        let index = 0, inputIndex = 0;
+        while (index < length) {
+          result[index++] = inputL[inputIndex];
+          result[index++] = inputR[inputIndex];
+          inputIndex++;
+        }
+      } else {
+        result = mainAudioBuffer.getChannelData(0);
+      }
+
+      let wavBuffer = encodeWAV(result, sampleRate, numChannels);
+      let blob = new Blob([new DataView(wavBuffer)], { type: 'audio/wav' });
+      
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); 
+      a.href = url;
+      a.download = 'teleprompter_export.wav'; 
+      a.click();
+      showToast('WAV Export completed', 'success');
     }
 
     async function exportMp4WebmFile() {
@@ -923,7 +1094,7 @@
         const blob = new Blob(chunks, { type: mimeType });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a'); a.href = url;
-        a.download = `recording.${mimeType.includes('mp4') ? 'mp4' : 'webm'}`; a.click();
+        a.download = `teleprompter_export.${mimeType.includes('mp4') ? 'mp4' : 'webm'}`; a.click();
         showToast("Export completed!", "success");
       };
       const src = audioCtx.createBufferSource();
@@ -980,14 +1151,20 @@
       showAutosaveStatus(true, 'Autosaving...');
       setTimeout(() => {
         try {
+          // Save lightweight script data to local storage
           const payload = { id: 'current_session', scriptBlocks, currentBlockIndex, timestamp: Date.now() };
           localStorage.setItem('teleprompter_session', JSON.stringify(payload));
+          
+          // Save heavy audio buffer files to IndexedDB
+          saveAudioToDB();
+          
           showAutosaveStatus(false, 'Autosave Active');
         } catch (err) { showAutosaveStatus(false, 'Autosave Error'); }
       }, 500);
     }
 
     async function loadSavedSession() {
+      // 1. Load textual state
       try {
         const raw = localStorage.getItem('teleprompter_session');
         if (raw) {
@@ -1000,9 +1177,20 @@
           }
         }
       } catch (err) {}
+      
+      // 2. Load audio buffers from IndexedDB
+      try {
+        const clips = await loadAudioFromDB();
+        if (clips && clips.length > 0) {
+          blockClips = clips;
+          rebuildMainBuffer();
+        }
+      } catch (err) {}
+
       selectedBlockIndices.clear();
       selectedBlockIndices.add(currentBlockIndex);
       updateBlockView();
+      drawWaveform();
     }
 
     function formatTime(seconds) {
@@ -1283,6 +1471,7 @@
       if (window.lucide) lucide.createIcons();
       await initDB();
       await loadSavedSession();
+      await populateMicSelect();
       drawWaveform();
       updateUIState();
     };
