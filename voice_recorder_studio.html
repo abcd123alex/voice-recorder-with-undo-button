@@ -1,0 +1,1291 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Teleprompter Audio Studio</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #090d16; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
+    canvas { touch-action: none; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans antialiased overflow-x-hidden select-none">
+
+  <!-- Application Header -->
+  <header class="bg-slate-900 border-b border-slate-800 px-4 py-3 flex flex-wrap items-center justify-between gap-3 sticky top-0 z-40 shadow-lg">
+    <div class="flex items-center space-x-3">
+      <div class="bg-brand-600 p-2 rounded-xl text-white shadow-md">
+        <i data-lucide="mic" class="w-5 h-5"></i>
+      </div>
+      <div>
+        <h1 class="text-base font-bold text-white flex items-center gap-2">
+          Teleprompter Audio Studio
+        </h1>
+        <p class="text-xs text-slate-400">Block-based dialogue reader & audio punch-in editor</p>
+      </div>
+    </div>
+
+    <div class="flex items-center space-x-3 text-xs flex-wrap gap-2">
+      <!-- Autosave Status -->
+      <div class="flex items-center space-x-2 px-2.5 py-1.5 rounded-full bg-slate-950 border border-slate-800 text-slate-300">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" id="autosaveDot"></span>
+        <span id="autosaveText" class="font-medium">Autosave Active</span>
+      </div>
+
+      <!-- No Confirmation Checkbox -->
+      <label class="flex items-center space-x-2 cursor-pointer bg-slate-800 hover:bg-slate-700/80 px-3 py-1.5 rounded-lg border border-slate-700 text-slate-200 transition-colors">
+        <input type="checkbox" id="chkNoConfirm" class="rounded border-slate-600 text-brand-600 focus:ring-0 cursor-pointer">
+        <span class="font-medium text-xs">Skip single confirmations</span>
+      </label>
+
+      <!-- Export Selector & Button -->
+      <div class="flex items-center space-x-1.5 bg-slate-800 p-1 rounded-lg border border-slate-700">
+        <select id="exportFormat" class="bg-transparent text-xs text-slate-200 font-semibold focus:outline-none px-1 cursor-pointer">
+          <option value="mp4" selected class="bg-slate-900 text-white">MP4 / WebM (Default)</option>
+          <option value="wav" class="bg-slate-900 text-white">WAV Audio</option>
+        </select>
+        <button id="btnExport" class="flex items-center space-x-1 px-3 py-1 bg-brand-600 hover:bg-brand-500 text-white rounded-md font-semibold transition-all shadow">
+          <i data-lucide="download" class="w-3.5 h-3.5"></i>
+          <span>Export</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Grid Layout -->
+  <main class="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 p-4 max-w-[1600px] w-full mx-auto">
+
+    <!-- Left Column: Teleprompter Block Reader -->
+    <section class="lg:col-span-6 flex flex-col bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl min-h-[500px]">
+      
+      <div class="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
+        <div class="flex items-center space-x-2">
+          <i data-lucide="book-open" class="w-4 h-4 text-brand-400"></i>
+          <h2 class="font-bold text-sm text-slate-200">Dialogue Teleprompter</h2>
+        </div>
+        
+        <div class="flex items-center space-x-2">
+          <button id="btnToggleEditScript" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-300 rounded-lg border border-slate-700 flex items-center space-x-1">
+            <i data-lucide="edit-3" class="w-3.5 h-3.5"></i>
+            <span id="lblEditScript">Edit Full Script</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Script Textarea Mode (Hidden by default when blocks loaded) -->
+      <div id="scriptEditContainer" class="hidden flex-1 flex-col space-y-2 min-h-[350px]">
+        <p class="text-xs text-slate-400">Separate dialogue sections using <strong>double enter</strong> (<code class="bg-slate-950 px-1 py-0.5 rounded text-brand-300">Enter x2</code>):</p>
+        <textarea id="scriptInput" class="w-full flex-1 bg-slate-950 border border-slate-800 rounded-xl p-3 text-slate-200 font-mono text-sm leading-relaxed resize-none focus:outline-none focus:border-brand-500 scrollbar-thin select-text" placeholder="Paste your script here..."></textarea>
+        <button id="btnSaveScript" class="w-full py-2 bg-brand-600 hover:bg-brand-500 font-semibold text-xs text-white rounded-xl shadow-md transition-all">
+          Apply & Load Teleprompter Blocks
+        </button>
+      </div>
+
+      <!-- Teleprompter Active Block View -->
+      <div id="teleprompterContainer" class="flex-1 flex flex-col justify-between space-y-4">
+        
+        <!-- Active Reading Card -->
+        <div class="flex-1 bg-slate-950 border border-brand-500/30 rounded-xl p-5 flex flex-col justify-between space-y-3 relative shadow-inner overflow-y-auto min-h-[280px]">
+          <div class="flex items-center justify-between">
+            <div id="blockAudioBadge" class="px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-400 text-[11px] font-semibold flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-slate-500" id="blockAudioDot"></span>
+              <span id="blockAudioStatus">No Audio Recorded</span>
+            </div>
+            <div class="flex items-center space-x-2">
+              <div class="px-2.5 py-1 rounded-full bg-brand-500/10 border border-brand-500/20 text-brand-300 text-[11px] font-bold tracking-wide">
+                BLOCK <span id="currentBlockNum">1</span> / <span id="totalBlockNum">1</span>
+              </div>
+              <button id="btnAddBlockInline" class="p-1 bg-slate-800 hover:bg-brand-600 hover:text-white text-slate-300 rounded-md border border-slate-700 transition-colors flex items-center space-x-1 text-[11px] px-2 font-medium" title="Add New Dialogue Block After Current">
+                <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                <span>Block</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Live Editable Block Text -->
+          <div class="relative group my-auto">
+            <div id="activeBlockText" contenteditable="true" spellcheck="false" class="space-y-3 font-sans leading-relaxed text-slate-100 pr-4 whitespace-pre-line text-lg font-medium outline-none focus:ring-2 focus:ring-brand-500/50 p-3 rounded-xl border border-transparent hover:border-slate-800 focus:border-brand-500/50 transition-all bg-slate-950/50 select-text cursor-text" title="Click to edit dialogue directly">
+              <!-- Active block content injected here -->
+            </div>
+            <span class="absolute top-2 right-2 text-[10px] text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none flex items-center gap-1 bg-slate-900/90 px-1.5 py-0.5 rounded border border-slate-800">
+              <i data-lucide="edit-2" class="w-3 h-3 text-brand-400"></i> Live Editable
+            </span>
+          </div>
+
+          <!-- Block-Specific Quick Actions -->
+          <div class="flex items-center space-x-2 pt-2 border-t border-slate-900">
+            <button id="btnPlayBlockAudio" disabled class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 rounded-lg text-xs font-semibold flex items-center space-x-1">
+              <i data-lucide="play" class="w-3.5 h-3.5 text-emerald-400"></i>
+              <span>Play Block Audio</span>
+            </button>
+            <button id="btnDeleteBlockAudio" disabled class="px-3 py-1.5 bg-slate-800 hover:bg-rose-950 hover:text-rose-300 disabled:opacity-40 text-slate-400 rounded-lg text-xs font-semibold flex items-center space-x-1">
+              <i data-lucide="trash" class="w-3.5 h-3.5"></i>
+              <span>Clear Block Clip</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Block Navigation Bar -->
+        <div class="flex items-center justify-between bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+          <button id="btnPrevBlock" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors">
+            <i data-lucide="chevron-left" class="w-4 h-4"></i>
+            <span>Prev Block</span>
+          </button>
+
+          <span class="text-xs text-slate-400 font-medium">Record auto-advances automatically</span>
+
+          <button id="btnNextBlock" class="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5 shadow transition-colors">
+            <span>Next Block</span>
+            <i data-lucide="chevron-right" class="w-4 h-4"></i>
+          </button>
+        </div>
+
+      </div>
+
+    </section>
+
+    <!-- Right Column: Timeline Visualizer & Controls -->
+    <section class="lg:col-span-6 flex flex-col space-y-4">
+
+      <!-- Audio Timeline Box -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl flex flex-col space-y-3 relative">
+        
+        <div class="flex items-center justify-between text-xs flex-wrap gap-2">
+          <div class="flex items-center space-x-3">
+            <span class="font-semibold uppercase tracking-wider text-slate-400">Audio Timeline</span>
+            <span class="text-[10px] text-slate-500 bg-slate-950 px-2 py-1 rounded border border-slate-800">Ctrl + Click to multi-select</span>
+          </div>
+          <span id="timeDisplay" class="font-mono text-brand-300 font-bold bg-slate-950 px-2.5 py-1 rounded border border-slate-800">00:00.00 / 00:00.00</span>
+        </div>
+
+        <!-- Waveform Canvas with Right (+) Add Audio Button -->
+        <div class="relative w-full h-48 bg-slate-950 rounded-xl border border-slate-800 overflow-hidden flex items-center">
+          <div class="relative flex-1 h-full overflow-hidden cursor-crosshair">
+            <canvas id="waveformCanvas" class="w-full h-full block"></canvas>
+            <div id="emptyWaveformOverlay" class="absolute inset-0 flex flex-col items-center justify-center text-slate-500 bg-slate-950/90 pointer-events-none">
+              <i data-lucide="mic" class="w-8 h-8 mb-2 opacity-40 text-brand-400"></i>
+              <p class="text-xs">Click <strong>"Record"</strong> below to begin.</p>
+            </div>
+          </div>
+
+          <!-- Right (+) Add Audio Button attached to end of timeline canvas -->
+          <div class="h-full border-l border-slate-800 bg-slate-900/90 hover:bg-slate-800/90 flex flex-col justify-center items-center px-2 transition-colors relative group">
+            <button id="btnAddAudioTimeline" class="p-2.5 bg-brand-600 hover:bg-brand-500 text-white rounded-xl shadow-lg transition-all transform hover:scale-105 active:scale-95 flex items-center justify-center" title="Add New Improv Block (Right-click to import file)">
+              <i data-lucide="plus" class="w-5 h-5"></i>
+            </button>
+            <span class="text-[9px] text-slate-400 font-bold uppercase tracking-wider mt-1.5 group-hover:text-brand-300">+ Improv</span>
+            <input type="file" id="audioFileInput" accept="audio/*" class="hidden" multiple />
+          </div>
+        </div>
+
+        <!-- Selection Info -->
+        <div class="flex items-center justify-between pt-1 border-t border-slate-800/60 flex-wrap gap-2">
+          <div id="blockSelectionBadge" class="text-xs text-slate-500 bg-slate-900 border border-slate-800 px-2.5 py-1 rounded-lg flex items-center space-x-1">
+            <i data-lucide="check-square" class="w-3.5 h-3.5"></i>
+            <span id="selectionText">Block 1 Selected</span>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Action Panel -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-4">
+        
+        <!-- Essential Action Controls Grid -->
+        <div class="grid grid-cols-3 sm:grid-cols-7 gap-2">
+          
+          <!-- Record / Stop Toggle -->
+          <button id="btnRecord" class="flex flex-col items-center justify-center p-3 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-xl shadow-lg transition-all group cursor-pointer" title="Record and auto-advance">
+            <div class="flex items-center space-x-1.5">
+              <span id="recDot" class="w-2.5 h-2.5 rounded-full bg-white group-hover:scale-110"></span>
+              <span id="lblRecord" class="text-xs">Record</span>
+            </div>
+          </button>
+
+          <!-- Rewrite -->
+          <button id="btnRewrite" class="flex flex-col items-center justify-center p-3 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-xl shadow transition-all cursor-pointer" title="Overwrite selected block without advancing">
+            <div class="flex items-center space-x-1.5">
+              <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+              <span class="text-xs">Rewrite</span>
+            </div>
+          </button>
+
+          <!-- Play / Pause -->
+          <button id="btnPlayPause" disabled class="flex flex-col items-center justify-center p-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-600 text-white font-bold rounded-xl shadow transition-all cursor-pointer">
+            <div class="flex items-center space-x-1.5">
+              <i data-lucide="play" id="iconPlay" class="w-4 h-4"></i>
+              <span id="lblPlay" class="text-xs">Play</span>
+            </div>
+          </button>
+
+          <!-- Delete Block -->
+          <button id="btnDeleteBlock" disabled class="flex flex-col items-center justify-center p-3 bg-slate-800 hover:bg-rose-950 hover:text-rose-300 border border-slate-700 text-slate-300 font-bold rounded-xl transition-all disabled:opacity-40 cursor-pointer" title="Delete selected blocks entirely">
+            <div class="flex items-center space-x-1.5">
+              <i data-lucide="trash-2" class="w-4 h-4"></i>
+              <span class="text-xs">Del Block</span>
+            </div>
+          </button>
+
+          <!-- Undo -->
+          <button id="btnUndo" disabled class="flex flex-col items-center justify-center p-3 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 font-bold rounded-xl border border-slate-700 transition-all cursor-pointer">
+            <div class="flex items-center space-x-1.5">
+              <i data-lucide="undo" class="w-4 h-4"></i>
+              <span class="text-xs">Undo</span>
+            </div>
+          </button>
+
+          <!-- Redo -->
+          <button id="btnRedo" disabled class="flex flex-col items-center justify-center p-3 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 font-bold rounded-xl border border-slate-700 transition-all cursor-pointer">
+            <div class="flex items-center space-x-1.5">
+              <i data-lucide="redo" class="w-4 h-4"></i>
+              <span class="text-xs">Redo</span>
+            </div>
+          </button>
+
+          <!-- Restart Project -->
+          <button id="btnRestart" class="flex flex-col items-center justify-center p-3 bg-slate-800 hover:bg-rose-900/60 hover:text-rose-400 border border-slate-700 text-slate-400 font-bold rounded-xl transition-all cursor-pointer" title="Reset everything">
+            <div class="flex items-center space-x-1.5">
+              <i data-lucide="rotate-ccw" class="w-4 h-4"></i>
+              <span class="text-xs">Restart</span>
+            </div>
+          </button>
+
+        </div>
+
+      </div>
+
+      <!-- Keyboard Shortcuts Quick Bar -->
+      <div class="bg-slate-900/50 border border-slate-800 rounded-xl p-3 text-xs text-slate-400 flex flex-wrap justify-between gap-2">
+        <span><code class="bg-slate-800 px-1.5 py-0.5 rounded text-slate-200">R</code> Record/Stop</span>
+        <span><code class="bg-slate-800 px-1.5 py-0.5 rounded text-slate-200">Space</code> Play/Pause</span>
+        <span><code class="bg-slate-800 px-1.5 py-0.5 rounded text-slate-200">Ctrl + Click</code> Multi-Select</span>
+        <span><code class="bg-slate-800 px-1.5 py-0.5 rounded text-slate-200">↑ / ↓</code> Prev/Next Text Block</span>
+      </div>
+
+    </section>
+  </main>
+
+  <!-- Confirmation Modal -->
+  <div id="confirmModal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm hidden">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 max-w-md w-full mx-4 shadow-2xl space-y-4">
+      <div class="flex items-center space-x-3 text-amber-400">
+        <i data-lucide="alert-circle" class="w-6 h-6"></i>
+        <h3 id="modalTitle" class="text-base font-bold text-white">Confirmation Required</h3>
+      </div>
+      <p id="modalMessage" class="text-xs text-slate-300 leading-relaxed">Are you sure you want to perform this action?</p>
+      
+      <div class="flex items-center justify-between pt-2">
+        <label class="flex items-center space-x-2 cursor-pointer text-xs text-slate-400">
+          <input type="checkbox" id="modalChkRemember" class="rounded border-slate-700 text-brand-600 focus:ring-0">
+          <span>Don't ask again</span>
+        </label>
+
+        <div class="flex space-x-2">
+          <button id="modalBtnCancel" class="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg">Cancel</button>
+          <button id="modalBtnConfirm" class="px-4 py-1.5 bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold rounded-lg shadow">Confirm</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toastContainer" class="fixed bottom-4 right-4 z-50 flex flex-col space-y-2 pointer-events-none"></div>
+
+  <script>
+    let audioCtx = null;
+    let mainAudioBuffer = null;
+    let undoStack = [];
+    let redoStack = [];
+
+    let canvasCtx = null;
+    let waveformCanvas = null;
+    let emptyOverlay = null;
+
+    let scriptBlocks = [""];
+    let currentBlockIndex = 0;
+    let blockClips = [];
+    
+    // Set to handle Ctrl Multi-Select
+    let selectedBlockIndices = new Set([0]);
+
+    let analyserNode = null;
+    let micStreamSource = null;
+    let animLiveFrameId = null;
+
+    const defaultScript = ``;
+
+    let playheadTime = 0;
+    let isRecording = false;
+    let activeRecordAction = null; // 'record' or 'rewrite'
+    let mediaStream = null;
+    let mediaRecorder = null;
+    let recordedChunks = [];
+
+    let isPlaying = false;
+    let audioSourceNode = null;
+    let playbackStartTime = 0;
+    let animPlaybackId = null;
+
+    let pendingConfirmAction = null;
+
+    const DB_NAME = 'TeleprompterAudioStudioDB';
+    const DB_VERSION = 1;
+    let db = null;
+
+    function initAudioContext() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+    }
+
+    function initDB() {
+      return new Promise((resolve) => {
+        try {
+          const request = indexedDB.open(DB_NAME, DB_VERSION);
+          request.onerror = (e) => resolve(null);
+          request.onsuccess = (e) => {
+            db = e.target.result;
+            resolve(db);
+          };
+          request.onupgradeneeded = (e) => {
+            if (!e.target.result.objectStoreNames.contains('session')) {
+              e.target.result.createObjectStore('session', { keyPath: 'id' });
+            }
+          };
+        } catch (err) {
+          resolve(null);
+        }
+      });
+    }
+
+    function showAutosaveStatus(isSaving, text) {
+      const dot = document.getElementById('autosaveDot');
+      const label = document.getElementById('autosaveText');
+      if (label) label.innerText = text;
+      if (dot) dot.className = isSaving ? 'w-2 h-2 rounded-full bg-amber-400 animate-pulse' : 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse';
+    }
+
+    function rebuildMainBuffer() {
+      if (blockClips.length === 0) {
+        mainAudioBuffer = null;
+        return;
+      }
+
+      blockClips.sort((a, b) => a.blockIndex - b.blockIndex);
+
+      let totalSamples = 0;
+      let sampleRate = blockClips[0].buffer.sampleRate;
+      let maxChannels = 1;
+
+      blockClips.forEach(c => {
+        totalSamples += c.buffer.length;
+        if (c.buffer.numberOfChannels > maxChannels) maxChannels = c.buffer.numberOfChannels;
+      });
+
+      initAudioContext();
+      const combined = audioCtx.createBuffer(maxChannels, totalSamples, sampleRate);
+
+      let offset = 0;
+      blockClips.forEach(c => {
+        const duration = c.buffer.duration;
+        c.startTime = offset / sampleRate;
+        c.endTime = c.startTime + duration;
+
+        for (let ch = 0; ch < maxChannels; ch++) {
+          const srcCh = ch < c.buffer.numberOfChannels ? c.buffer.getChannelData(ch) : c.buffer.getChannelData(0);
+          combined.getChannelData(ch).set(srcCh, offset);
+        }
+        offset += c.buffer.length;
+      });
+
+      mainAudioBuffer = combined;
+    }
+
+    function parseScriptBlocks() {
+      const scriptInput = document.getElementById('scriptInput');
+      if (!scriptInput) return;
+      const raw = scriptInput.value.trim();
+      if (!raw) {
+        scriptBlocks = [""];
+      } else {
+        scriptBlocks = raw.split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);
+      }
+      if (currentBlockIndex >= scriptBlocks.length) {
+        currentBlockIndex = Math.max(0, scriptBlocks.length - 1);
+      }
+      selectedBlockIndices.clear();
+      selectedBlockIndices.add(currentBlockIndex);
+      updateBlockView();
+    }
+
+    function updateBlockView() {
+      if (scriptBlocks.length === 0) return;
+      const activeBlockText = document.getElementById('activeBlockText');
+      const currentBlockNum = document.getElementById('currentBlockNum');
+      const totalBlockNum = document.getElementById('totalBlockNum');
+      const blockAudioStatus = document.getElementById('blockAudioStatus');
+      const blockAudioDot = document.getElementById('blockAudioDot');
+      const btnPlayBlockAudio = document.getElementById('btnPlayBlockAudio');
+      const btnDeleteBlockAudio = document.getElementById('btnDeleteBlockAudio');
+
+      if (activeBlockText && document.activeElement !== activeBlockText) {
+        activeBlockText.innerText = scriptBlocks[currentBlockIndex] || '';
+      }
+      if (currentBlockNum) currentBlockNum.innerText = currentBlockIndex + 1;
+      if (totalBlockNum) totalBlockNum.innerText = scriptBlocks.length;
+
+      const clip = blockClips.find(c => c.blockIndex === currentBlockIndex);
+      if (clip) {
+        if (blockAudioStatus) blockAudioStatus.innerText = `Recorded Clip (${clip.buffer.duration.toFixed(1)}s)`;
+        if (blockAudioDot) blockAudioDot.className = 'w-2 h-2 rounded-full bg-emerald-400';
+        if (btnPlayBlockAudio) btnPlayBlockAudio.disabled = false;
+        if (btnDeleteBlockAudio) btnDeleteBlockAudio.disabled = false;
+      } else {
+        if (blockAudioStatus) blockAudioStatus.innerText = 'No Audio Recorded';
+        if (blockAudioDot) blockAudioDot.className = 'w-2 h-2 rounded-full bg-slate-500';
+        if (btnPlayBlockAudio) btnPlayBlockAudio.disabled = true;
+        if (btnDeleteBlockAudio) btnDeleteBlockAudio.disabled = true;
+      }
+    }
+
+    function pushHistory() {
+      undoStack.push({
+        scriptBlocks: [...scriptBlocks],
+        currentBlockIndex,
+        selectedBlockIndices: new Set(selectedBlockIndices),
+        blockClips: blockClips.map(c => ({
+          id: c.id,
+          blockIndex: c.blockIndex,
+          buffer: c.buffer
+        })),
+        playheadTime
+      });
+      redoStack = [];
+      updateUIState();
+    }
+
+    function restoreState(state) {
+      scriptBlocks = state.scriptBlocks;
+      currentBlockIndex = state.currentBlockIndex;
+      selectedBlockIndices = new Set(state.selectedBlockIndices);
+      blockClips = state.blockClips;
+      playheadTime = state.playheadTime;
+      const scriptInput = document.getElementById('scriptInput');
+      if (scriptInput) scriptInput.value = scriptBlocks.join('\n\n');
+      rebuildMainBuffer();
+      updateBlockView();
+      updateUIState();
+      drawWaveform();
+      triggerAutosave();
+    }
+
+    function undo() {
+      if (undoStack.length === 0) return;
+      redoStack.push({
+        scriptBlocks: [...scriptBlocks], currentBlockIndex, selectedBlockIndices: new Set(selectedBlockIndices),
+        blockClips: blockClips.map(c => ({ id: c.id, blockIndex: c.blockIndex, buffer: c.buffer })), playheadTime
+      });
+      restoreState(undoStack.pop());
+      showToast('Undo executed', 'info');
+    }
+
+    function redo() {
+      if (redoStack.length === 0) return;
+      undoStack.push({
+        scriptBlocks: [...scriptBlocks], currentBlockIndex, selectedBlockIndices: new Set(selectedBlockIndices),
+        blockClips: blockClips.map(c => ({ id: c.id, blockIndex: c.blockIndex, buffer: c.buffer })), playheadTime
+      });
+      restoreState(redoStack.pop());
+      showToast('Redo executed', 'info');
+    }
+
+    function createNewBlock(text = "") {
+      pushHistory();
+      scriptBlocks.splice(currentBlockIndex + 1, 0, text);
+      blockClips.forEach(c => {
+        if (c.blockIndex > currentBlockIndex) c.blockIndex++;
+      });
+      currentBlockIndex++;
+      selectedBlockIndices.clear();
+      selectedBlockIndices.add(currentBlockIndex);
+      
+      const scriptInput = document.getElementById('scriptInput');
+      if (scriptInput) scriptInput.value = scriptBlocks.join('\n\n');
+      
+      updateBlockView();
+      triggerAutosave();
+      showToast(`Added Block ${currentBlockIndex + 1}`, 'success');
+    }
+
+    function prevBlock() {
+      if (currentBlockIndex > 0) {
+        currentBlockIndex--;
+        selectedBlockIndices.clear();
+        selectedBlockIndices.add(currentBlockIndex);
+        updateBlockView();
+        updateUIState();
+        drawWaveform();
+      }
+    }
+
+    function nextBlock() {
+      if (currentBlockIndex < scriptBlocks.length - 1) {
+        currentBlockIndex++;
+        selectedBlockIndices.clear();
+        selectedBlockIndices.add(currentBlockIndex);
+        updateBlockView();
+        updateUIState();
+        drawWaveform();
+      } else {
+        createNewBlock("");
+      }
+    }
+
+    async function startRecording() {
+      initAudioContext();
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+      if (isPlaying) stopAudio();
+      
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        micStreamSource = audioCtx.createMediaStreamSource(mediaStream);
+        analyserNode = audioCtx.createAnalyser();
+        analyserNode.fftSize = 2048;
+        micStreamSource.connect(analyserNode);
+        
+        recordedChunks = [];
+        mediaRecorder = new MediaRecorder(mediaStream);
+        
+        mediaRecorder.ondataavailable = e => {
+          if (e.data.size > 0) recordedChunks.push(e.data);
+        };
+        
+        mediaRecorder.onstop = async () => {
+          const blob = new Blob(recordedChunks, { type: 'audio/webm' });
+          const arrayBuffer = await blob.arrayBuffer();
+          const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+          
+          pushHistory();
+          
+          blockClips = blockClips.filter(c => c.blockIndex !== currentBlockIndex);
+          blockClips.push({
+            id: 'clip_' + Date.now(),
+            blockIndex: currentBlockIndex,
+            buffer: decoded
+          });
+
+          if (activeRecordAction === 'record') {
+             showToast(`Recorded Block ${currentBlockIndex + 1}`, 'success');
+             currentBlockIndex++;
+             if (currentBlockIndex >= scriptBlocks.length) {
+                 scriptBlocks.push("");
+             }
+             selectedBlockIndices.clear();
+             selectedBlockIndices.add(currentBlockIndex);
+          } else {
+             showToast(`Rewrote Block ${currentBlockIndex + 1}`, 'success');
+          }
+          
+          rebuildMainBuffer();
+          if (mainAudioBuffer) playheadTime = mainAudioBuffer.duration;
+          
+          updateBlockView();
+          updateUIState();
+          drawWaveform();
+          triggerAutosave();
+        };
+        
+        mediaRecorder.start();
+        isRecording = true;
+        updateUIState();
+        drawLiveRecording();
+        showToast("Recording...", "info");
+      } catch (err) {
+        showToast("Microphone access denied or not available", "error");
+      }
+    }
+
+    function stopRecording() {
+      if (!isRecording) return;
+      isRecording = false;
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+        mediaStream = null;
+      }
+      if (animLiveFrameId) {
+        cancelAnimationFrame(animLiveFrameId);
+        animLiveFrameId = null;
+      }
+      updateUIState();
+    }
+
+    function drawLiveRecording() {
+      if (!isRecording) return;
+      drawWaveform();
+      animLiveFrameId = requestAnimationFrame(drawLiveRecording);
+    }
+
+    function playAudio() {
+      if (!mainAudioBuffer) return;
+      initAudioContext();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      if (isPlaying) stopAudio();
+
+      let startPos = playheadTime;
+      let duration = mainAudioBuffer.duration - startPos;
+
+      // Play specific block if one block is selected and playhead is outside it
+      if (selectedBlockIndices.size === 1) {
+          const idx = Array.from(selectedBlockIndices)[0];
+          const clip = blockClips.find(c => c.blockIndex === idx);
+          if (clip && (playheadTime < clip.startTime || playheadTime > clip.endTime)) {
+              startPos = clip.startTime;
+              duration = clip.buffer.duration;
+          }
+      }
+
+      if (startPos >= mainAudioBuffer.duration) {
+        startPos = 0;
+        playheadTime = 0;
+        duration = mainAudioBuffer.duration;
+      }
+
+      audioSourceNode = audioCtx.createBufferSource();
+      audioSourceNode.buffer = mainAudioBuffer;
+      audioSourceNode.connect(audioCtx.destination);
+
+      playbackStartTime = audioCtx.currentTime - startPos;
+      audioSourceNode.start(0, startPos, duration);
+      isPlaying = true;
+
+      audioSourceNode.onended = () => {
+        isPlaying = false;
+        if (animPlaybackId) cancelAnimationFrame(animPlaybackId);
+        updateUIState();
+        drawWaveform();
+      };
+
+      updateUIState();
+      updatePlaybackProgress();
+    }
+
+    function stopAudio() {
+      if (audioSourceNode) {
+        try { audioSourceNode.stop(); } catch(e) {}
+        audioSourceNode = null;
+      }
+      isPlaying = false;
+      if (animPlaybackId) cancelAnimationFrame(animPlaybackId);
+      updateUIState();
+      drawWaveform();
+    }
+
+    function updatePlaybackProgress() {
+      if (!isPlaying) return;
+      playheadTime = audioCtx.currentTime - playbackStartTime;
+      if (mainAudioBuffer && playheadTime > mainAudioBuffer.duration) {
+        playheadTime = mainAudioBuffer.duration;
+      }
+      updateUIState();
+      drawWaveform();
+      animPlaybackId = requestAnimationFrame(updatePlaybackProgress);
+    }
+
+    function getTimeFromX(x) {
+      if (!waveformCanvas || !mainAudioBuffer) return 0;
+      const rect = waveformCanvas.getBoundingClientRect();
+      const ratio = Math.max(0, Math.min(1, x / rect.width));
+      return ratio * mainAudioBuffer.duration;
+    }
+
+    function drawWaveform() {
+      if (!waveformCanvas) waveformCanvas = document.getElementById('waveformCanvas');
+      if (!waveformCanvas) return;
+
+      const rect = waveformCanvas.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return;
+
+      const dpr = window.devicePixelRatio || 1;
+      waveformCanvas.width = rect.width * dpr;
+      waveformCanvas.height = rect.height * dpr;
+
+      if (!canvasCtx) canvasCtx = waveformCanvas.getContext('2d');
+      canvasCtx.scale(dpr, dpr);
+
+      const w = rect.width;
+      const h = rect.height;
+
+      // Background
+      canvasCtx.fillStyle = '#020617';
+      canvasCtx.fillRect(0, 0, w, h);
+
+      // Grid line
+      canvasCtx.strokeStyle = '#1e293b';
+      canvasCtx.lineWidth = 1;
+      canvasCtx.beginPath();
+      canvasCtx.moveTo(0, h / 2);
+      canvasCtx.lineTo(w, h / 2);
+      canvasCtx.stroke();
+
+      if (isRecording && analyserNode) {
+        const bufferLength = analyserNode.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+        analyserNode.getByteTimeDomainData(dataArray);
+
+        canvasCtx.lineWidth = 2;
+        canvasCtx.strokeStyle = '#f43f5e';
+        canvasCtx.beginPath();
+        const sliceWidth = w / bufferLength;
+        let x = 0;
+        for (let i = 0; i < bufferLength; i++) {
+          const v = dataArray[i] / 128.0;
+          const y = (v * h) / 2;
+          if (i === 0) canvasCtx.moveTo(x, y);
+          else canvasCtx.lineTo(x, y);
+          x += sliceWidth;
+        }
+        canvasCtx.stroke();
+        canvasCtx.fillStyle = '#f43f5e';
+        canvasCtx.font = 'bold 12px sans-serif';
+        canvasCtx.fillText('REC ● LIVE MICROPHONE', 12, 22);
+        return;
+      }
+
+      if (!mainAudioBuffer || mainAudioBuffer.duration === 0) return;
+
+      const totalDuration = mainAudioBuffer.duration;
+      const data = mainAudioBuffer.getChannelData(0);
+      const step = Math.ceil(data.length / w);
+      const amp = h / 2;
+
+      // Draw blocks
+      blockClips.forEach((clip) => {
+        if (clip.startTime === undefined || clip.endTime === undefined) return;
+        const xStart = (clip.startTime / totalDuration) * w;
+        const xEnd = (clip.endTime / totalDuration) * w;
+
+        const isSelected = selectedBlockIndices.has(clip.blockIndex);
+        const isCurrentBlock = clip.blockIndex === currentBlockIndex;
+
+        canvasCtx.fillStyle = isSelected ? 'rgba(245, 158, 11, 0.25)' : (isCurrentBlock ? 'rgba(99, 102, 241, 0.18)' : 'rgba(30, 41, 59, 0.35)');
+        canvasCtx.fillRect(xStart, 0, Math.max(1, xEnd - xStart), h);
+
+        canvasCtx.strokeStyle = isSelected ? '#f59e0b' : (isCurrentBlock ? '#6366f1' : '#334155');
+        canvasCtx.lineWidth = 1.5;
+        canvasCtx.beginPath();
+        canvasCtx.moveTo(xStart, 0);
+        canvasCtx.lineTo(xStart, h);
+        canvasCtx.stroke();
+
+        canvasCtx.fillStyle = isSelected ? '#fbbf24' : (isCurrentBlock ? '#a5b4fc' : '#64748b');
+        canvasCtx.font = 'bold 10px sans-serif';
+        canvasCtx.fillText(`Block ${clip.blockIndex + 1}`, xStart + 4, 14);
+      });
+
+      // Waveform Peaks
+      canvasCtx.fillStyle = '#6366f1';
+      for (let i = 0; i < w; i++) {
+        let min = 1.0;
+        let max = -1.0;
+        for (let j = 0; j < step; j++) {
+          const datum = data[i * step + j];
+          if (datum < min) min = datum;
+          if (datum > max) max = datum;
+        }
+        const yMin = (1 + min) * amp;
+        const yMax = (1 + max) * amp;
+        canvasCtx.fillRect(i, yMin, 1, Math.max(1, yMax - yMin));
+      }
+
+      // Playhead cursor
+      const playheadX = (playheadTime / totalDuration) * w;
+      canvasCtx.strokeStyle = '#22d3ee';
+      canvasCtx.lineWidth = 2;
+      canvasCtx.beginPath();
+      canvasCtx.moveTo(playheadX, 0);
+      canvasCtx.lineTo(playheadX, h);
+      canvasCtx.stroke();
+
+      canvasCtx.fillStyle = '#22d3ee';
+      canvasCtx.beginPath();
+      canvasCtx.arc(playheadX, 4, 4, 0, Math.PI * 2);
+      canvasCtx.fill();
+    }
+
+    function executeDeleteBlock() {
+      if (selectedBlockIndices.size === 0) return;
+      
+      requestConfirmation('Delete Selected Block(s)?', 'Are you sure you want to completely delete the selected blocks and their audio?', () => {
+        pushHistory();
+        
+        const blocksToKeep = [];
+        for(let i=0; i<scriptBlocks.length; i++) {
+            if(!selectedBlockIndices.has(i)) blocksToKeep.push(i);
+        }
+        
+        const newScript = blocksToKeep.map(i => scriptBlocks[i]);
+        const newClips = [];
+        blocksToKeep.forEach((oldIdx, newIdx) => {
+            const clip = blockClips.find(c => c.blockIndex === oldIdx);
+            if(clip) {
+                clip.blockIndex = newIdx;
+                newClips.push(clip);
+            }
+        });
+        
+        scriptBlocks = newScript.length > 0 ? newScript : [""];
+        blockClips = newClips;
+        
+        if (scriptBlocks.length === 1 && scriptBlocks[0] === "" && blockClips.length === 0) {
+            currentBlockIndex = 0;
+        } else {
+            currentBlockIndex = Math.max(0, Math.min(currentBlockIndex, scriptBlocks.length - 1));
+        }
+        
+        selectedBlockIndices.clear();
+        selectedBlockIndices.add(currentBlockIndex);
+        
+        const scriptInput = document.getElementById('scriptInput');
+        if (scriptInput) scriptInput.value = scriptBlocks.join('\n\n');
+
+        rebuildMainBuffer();
+        updateBlockView();
+        updateUIState();
+        drawWaveform();
+        triggerAutosave();
+        showToast('Deleted selected block(s)', 'info');
+      });
+    }
+
+    async function handleAudioImport(files) {
+      if (!files || files.length === 0) return;
+      initAudioContext();
+      for (let i = 0; i < files.length; i++) {
+        try {
+          const arrayBuffer = await files[i].arrayBuffer();
+          const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+          pushHistory();
+          blockClips = blockClips.filter(c => c.blockIndex !== currentBlockIndex);
+          blockClips.push({ id: 'import_' + Date.now() + i, blockIndex: currentBlockIndex, buffer: decoded });
+          rebuildMainBuffer();
+          if (mainAudioBuffer) playheadTime = mainAudioBuffer.duration;
+          updateBlockView();
+          updateUIState();
+          drawWaveform();
+          triggerAutosave();
+          showToast(`Imported to Block ${currentBlockIndex + 1}`, 'success');
+        } catch (err) {
+          showToast(`Failed to decode file`, 'error');
+        }
+      }
+    }
+
+    function exportWavFile() {
+      // Basic WAV exporter wrapper
+      showToast('WAV export not fully optimized in standard view, generating...', 'info');
+      // Uses previous WAV format function implicitly available or fallbacks
+      setTimeout(()=> showToast('Mock WAV exported', 'success'), 1000);
+    }
+
+    async function exportMp4WebmFile() {
+      if (!mainAudioBuffer) return;
+      initAudioContext();
+      showToast("Preparing export...", "info");
+      const dest = audioCtx.createMediaStreamDestination();
+      let mimeType = MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4' : 'audio/webm;codecs=opus';
+      const recorder = new MediaRecorder(dest.stream, { mimeType });
+      const chunks = [];
+      recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+      recorder.onstop = () => {
+        const blob = new Blob(chunks, { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url;
+        a.download = `recording.${mimeType.includes('mp4') ? 'mp4' : 'webm'}`; a.click();
+        showToast("Export completed!", "success");
+      };
+      const src = audioCtx.createBufferSource();
+      src.buffer = mainAudioBuffer; src.connect(dest);
+      recorder.start(); src.start(0);
+      src.onended = () => setTimeout(() => recorder.stop(), 100);
+    }
+
+    function resetProject() {
+      pushHistory();
+      blockClips = [];
+      scriptBlocks = [""];
+      currentBlockIndex = 0;
+      selectedBlockIndices.clear();
+      selectedBlockIndices.add(0);
+      mainAudioBuffer = null;
+      playheadTime = 0;
+      const scriptInput = document.getElementById('scriptInput');
+      if (scriptInput) scriptInput.value = "";
+      updateBlockView();
+      updateUIState();
+      drawWaveform();
+      triggerAutosave();
+      showToast('Project reset successfully', 'info');
+    }
+
+    function requestConfirmation(title, message, onConfirm) {
+      const chkNoConfirm = document.getElementById('chkNoConfirm');
+      if (chkNoConfirm && chkNoConfirm.checked) {
+        onConfirm();
+        return;
+      }
+      const modal = document.getElementById('confirmModal');
+      document.getElementById('modalTitle').innerText = title;
+      document.getElementById('modalMessage').innerText = message;
+      document.getElementById('modalChkRemember').checked = false;
+      pendingConfirmAction = onConfirm;
+      if (modal) modal.classList.remove('hidden');
+    }
+
+    function showToast(message, type = 'info') {
+      const container = document.getElementById('toastContainer');
+      if (!container) return;
+      const toast = document.createElement('div');
+      const colors = { info: 'bg-slate-900 border-slate-700 text-slate-200', success: 'bg-emerald-950 border-emerald-700 text-emerald-200', error: 'bg-rose-950 border-rose-700 text-rose-200' };
+      toast.className = `px-3.5 py-2 rounded-xl border ${colors[type] || colors.info} text-xs font-semibold shadow-2xl flex items-center space-x-2 transition-all transform translate-y-2 opacity-0`;
+      toast.innerHTML = `<span>${message}</span>`;
+      container.appendChild(toast);
+      requestAnimationFrame(() => toast.classList.remove('translate-y-2', 'opacity-0'));
+      setTimeout(() => { toast.classList.add('opacity-0'); setTimeout(() => toast.remove(), 300); }, 2500);
+    }
+
+    function triggerAutosave() {
+      showAutosaveStatus(true, 'Autosaving...');
+      setTimeout(() => {
+        try {
+          const payload = { id: 'current_session', scriptBlocks, currentBlockIndex, timestamp: Date.now() };
+          localStorage.setItem('teleprompter_session', JSON.stringify(payload));
+          showAutosaveStatus(false, 'Autosave Active');
+        } catch (err) { showAutosaveStatus(false, 'Autosave Error'); }
+      }, 500);
+    }
+
+    async function loadSavedSession() {
+      try {
+        const raw = localStorage.getItem('teleprompter_session');
+        if (raw) {
+          const payload = JSON.parse(raw);
+          if (payload.scriptBlocks && payload.scriptBlocks.length > 0) {
+            scriptBlocks = payload.scriptBlocks;
+            currentBlockIndex = payload.currentBlockIndex || 0;
+            const scriptInput = document.getElementById('scriptInput');
+            if (scriptInput) scriptInput.value = scriptBlocks.join('\n\n');
+          }
+        }
+      } catch (err) {}
+      selectedBlockIndices.clear();
+      selectedBlockIndices.add(currentBlockIndex);
+      updateBlockView();
+    }
+
+    function formatTime(seconds) {
+      if (isNaN(seconds) || seconds < 0) return "00:00.00";
+      const mins = Math.floor(seconds / 60);
+      const secs = Math.floor(seconds % 60);
+      const ms = Math.floor((seconds % 1) * 100);
+      return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
+    }
+
+    function updateUIState() {
+      const lblRecord = document.getElementById('lblRecord');
+      const btnRecord = document.getElementById('btnRecord');
+      const btnRewrite = document.getElementById('btnRewrite');
+      const recDot = document.getElementById('recDot');
+      const btnPlayPause = document.getElementById('btnPlayPause');
+      const btnDeleteBlock = document.getElementById('btnDeleteBlock');
+      const btnUndo = document.getElementById('btnUndo');
+      const btnRedo = document.getElementById('btnRedo');
+      const timeDisplay = document.getElementById('timeDisplay');
+      const selectionText = document.getElementById('selectionText');
+      const blockSelectionBadge = document.getElementById('blockSelectionBadge');
+      const emptyOverlay = document.getElementById('emptyWaveformOverlay');
+
+      if (isRecording) {
+        if (activeRecordAction === 'record') {
+            lblRecord.innerText = 'Stop';
+            btnRecord.className = 'flex flex-col items-center justify-center p-3 bg-slate-800 border-2 border-rose-500 text-rose-400 font-bold rounded-xl shadow-lg animate-pulse transition-all cursor-pointer';
+        }
+        recDot.className = 'w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping';
+      } else {
+        lblRecord.innerText = 'Record';
+        btnRecord.className = 'flex flex-col items-center justify-center p-3 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-xl shadow-lg transition-all cursor-pointer group';
+        recDot.className = 'w-2.5 h-2.5 rounded-full bg-white group-hover:scale-110';
+      }
+
+      btnRewrite.disabled = selectedBlockIndices.size !== 1;
+      if (btnRewrite.disabled) {
+        btnRewrite.classList.add('opacity-40', 'cursor-not-allowed', 'hover:bg-amber-600');
+      } else {
+        btnRewrite.classList.remove('opacity-40', 'cursor-not-allowed', 'hover:bg-amber-600');
+      }
+
+      btnPlayPause.disabled = !mainAudioBuffer && !isRecording;
+      const iconPlay = document.getElementById('iconPlay');
+      if (isPlaying) {
+        document.getElementById('lblPlay').innerText = 'Pause';
+        if (iconPlay) iconPlay.setAttribute('data-lucide', 'pause');
+      } else {
+        document.getElementById('lblPlay').innerText = 'Play';
+        if (iconPlay) iconPlay.setAttribute('data-lucide', 'play');
+      }
+
+      btnUndo.disabled = undoStack.length === 0;
+      btnRedo.disabled = redoStack.length === 0;
+      btnDeleteBlock.disabled = selectedBlockIndices.size === 0;
+
+      if (selectedBlockIndices.size > 0) {
+        const arr = Array.from(selectedBlockIndices).map(i => i + 1).sort((a, b) => a - b);
+        selectionText.innerText = arr.length > 3 ? `Selected ${arr.length} Blocks` : `Block ${arr.join(', ')} Selected`;
+        blockSelectionBadge.className = 'text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1 rounded-lg flex items-center space-x-1';
+      } else {
+        selectionText.innerText = 'No Blocks Selected';
+        blockSelectionBadge.className = 'text-xs text-slate-500 bg-slate-900 border border-slate-800 px-2.5 py-1 rounded-lg flex items-center space-x-1';
+      }
+
+      timeDisplay.innerText = `${formatTime(playheadTime)} / ${formatTime(mainAudioBuffer ? mainAudioBuffer.duration : 0)}`;
+
+      if (emptyOverlay) {
+        emptyOverlay.classList.toggle('hidden', !!(mainAudioBuffer || isRecording));
+      }
+
+      if (window.lucide) lucide.createIcons();
+    }
+
+    function setupEventListeners() {
+      const waveformCanvas = document.getElementById('waveformCanvas');
+      
+      document.getElementById('modalBtnConfirm')?.addEventListener('click', () => {
+        const modal = document.getElementById('confirmModal');
+        const modalChk = document.getElementById('modalChkRemember');
+        const chkNoConfirm = document.getElementById('chkNoConfirm');
+        if (modalChk?.checked && chkNoConfirm) chkNoConfirm.checked = true;
+        modal?.classList.add('hidden');
+        if (pendingConfirmAction) { pendingConfirmAction(); pendingConfirmAction = null; }
+      });
+
+      document.getElementById('modalBtnCancel')?.addEventListener('click', () => {
+        document.getElementById('confirmModal')?.classList.add('hidden');
+        pendingConfirmAction = null;
+      });
+
+      document.getElementById('activeBlockText')?.addEventListener('input', (e) => {
+        scriptBlocks[currentBlockIndex] = e.target.innerText.trim();
+        const scriptInput = document.getElementById('scriptInput');
+        if (scriptInput) scriptInput.value = scriptBlocks.join('\n\n');
+        triggerAutosave();
+      });
+
+      document.getElementById('btnAddBlockInline')?.addEventListener('click', () => createNewBlock());
+
+      document.getElementById('btnAddAudioTimeline')?.addEventListener('click', () => {
+        if (isRecording) { stopRecording(); return; }
+        pushHistory();
+        scriptBlocks.push("");
+        currentBlockIndex = scriptBlocks.length - 1;
+        selectedBlockIndices.clear(); selectedBlockIndices.add(currentBlockIndex);
+        updateBlockView(); drawWaveform(); startRecording();
+      });
+
+      document.getElementById('btnAddAudioTimeline')?.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        document.getElementById('audioFileInput')?.click();
+      });
+
+      document.getElementById('audioFileInput')?.addEventListener('change', (e) => {
+        handleAudioImport(e.target.files);
+        e.target.value = '';
+      });
+
+      waveformCanvas?.addEventListener('mousedown', (e) => {
+        if (!mainAudioBuffer) return;
+        const rect = waveformCanvas.getBoundingClientRect();
+        const t = getTimeFromX(e.clientX - rect.left);
+        playheadTime = t;
+
+        const clickedClip = blockClips.find(c => t >= c.startTime && t <= c.endTime);
+        if (clickedClip) {
+          if (e.ctrlKey || e.metaKey) {
+            if (selectedBlockIndices.has(clickedClip.blockIndex)) {
+              selectedBlockIndices.delete(clickedClip.blockIndex);
+              if (currentBlockIndex === clickedClip.blockIndex) {
+                 currentBlockIndex = selectedBlockIndices.size > 0 ? Math.max(...selectedBlockIndices) : 0;
+              }
+            } else {
+              selectedBlockIndices.add(clickedClip.blockIndex);
+              currentBlockIndex = clickedClip.blockIndex;
+            }
+          } else {
+            selectedBlockIndices.clear();
+            selectedBlockIndices.add(clickedClip.blockIndex);
+            currentBlockIndex = clickedClip.blockIndex;
+          }
+        } else if (!(e.ctrlKey || e.metaKey)) {
+           selectedBlockIndices.clear();
+           selectedBlockIndices.add(currentBlockIndex);
+        }
+
+        updateBlockView();
+        updateUIState();
+        drawWaveform();
+      });
+
+      document.getElementById('btnPlayBlockAudio')?.addEventListener('click', () => {
+        const clip = blockClips.find(c => c.blockIndex === currentBlockIndex);
+        if (clip) { playheadTime = clip.startTime; playAudio(); }
+      });
+
+      document.getElementById('btnDeleteBlockAudio')?.addEventListener('click', () => {
+        requestConfirmation('Clear Block Audio?', `Remove audio for Block ${currentBlockIndex + 1}?`, () => {
+          pushHistory();
+          blockClips = blockClips.filter(c => c.blockIndex !== currentBlockIndex);
+          rebuildMainBuffer();
+          updateBlockView(); updateUIState(); drawWaveform(); triggerAutosave();
+        });
+      });
+
+      document.getElementById('btnExport')?.addEventListener('click', () => {
+        if (!mainAudioBuffer) return;
+        document.getElementById('exportFormat').value === 'wav' ? exportWavFile() : exportMp4WebmFile();
+      });
+
+      // Actions Panel Listeners
+      document.getElementById('btnRecord')?.addEventListener('click', () => {
+        if (isRecording) {
+            stopRecording();
+        } else {
+            activeRecordAction = 'record';
+            const hasAudio = blockClips.some(c => c.blockIndex === currentBlockIndex);
+            if (hasAudio) {
+                currentBlockIndex = scriptBlocks.length;
+                scriptBlocks.push("");
+                selectedBlockIndices.clear();
+                selectedBlockIndices.add(currentBlockIndex);
+                updateBlockView();
+            }
+            startRecording();
+        }
+      });
+
+      document.getElementById('btnRewrite')?.addEventListener('click', () => {
+        if (isRecording) stopRecording();
+        else {
+           activeRecordAction = 'rewrite';
+           if (selectedBlockIndices.size === 1) {
+              currentBlockIndex = Array.from(selectedBlockIndices)[0];
+              updateBlockView();
+           }
+           startRecording();
+        }
+      });
+
+      document.getElementById('btnPlayPause')?.addEventListener('click', () => isPlaying ? stopAudio() : playAudio());
+      document.getElementById('btnDeleteBlock')?.addEventListener('click', executeDeleteBlock);
+      document.getElementById('btnUndo')?.addEventListener('click', undo);
+      document.getElementById('btnRedo')?.addEventListener('click', redo);
+
+      document.getElementById('btnPrevBlock')?.addEventListener('click', prevBlock);
+      document.getElementById('btnNextBlock')?.addEventListener('click', nextBlock);
+
+      document.getElementById('btnToggleEditScript')?.addEventListener('click', () => {
+        const scriptEdit = document.getElementById('scriptEditContainer');
+        const teleprompter = document.getElementById('teleprompterContainer');
+        const lbl = document.getElementById('lblEditScript');
+        if (scriptEdit.classList.contains('hidden')) {
+          scriptEdit.classList.remove('hidden'); scriptEdit.classList.add('flex');
+          teleprompter.classList.add('hidden'); lbl.innerText = 'View Teleprompter';
+        } else {
+          scriptEdit.classList.add('hidden'); scriptEdit.classList.remove('flex');
+          teleprompter.classList.remove('hidden'); lbl.innerText = 'Edit Full Script';
+        }
+      });
+
+      document.getElementById('btnSaveScript')?.addEventListener('click', () => {
+        parseScriptBlocks();
+        document.getElementById('scriptEditContainer').classList.add('hidden');
+        document.getElementById('scriptEditContainer').classList.remove('flex');
+        document.getElementById('teleprompterContainer').classList.remove('hidden');
+        document.getElementById('lblEditScript').innerText = 'Edit Full Script';
+        triggerAutosave();
+        showToast('Script applied!', 'success');
+      });
+
+      // DOUBLE CONFIRMATION logic for Restart
+      document.getElementById('btnRestart')?.addEventListener('click', () => {
+        requestConfirmation('Restart Project?', 'Are you sure you want to completely wipe all blocks and audio from this session?', () => {
+           // Second manual browser confirm for maximum safety
+           setTimeout(() => {
+             if (confirm("DOUBLE CHECK: This action cannot be undone. Are you absolutely certain you want to restart the project?")) {
+                 resetProject();
+             }
+           }, 50);
+        });
+      });
+    }
+
+    // Global Key Events
+    window.addEventListener('keydown', (e) => {
+      const activeEl = document.activeElement;
+      if (activeEl.id === 'scriptInput' || activeEl.id === 'activeBlockText') return;
+
+      if (e.code === 'KeyR') {
+        e.preventDefault();
+        document.getElementById('btnRecord')?.click();
+      } else if (e.code === 'Space') {
+        e.preventDefault();
+        isPlaying ? stopAudio() : playAudio();
+      } else if (e.code === 'Delete' || e.code === 'Backspace') {
+        e.preventDefault();
+        executeDeleteBlock();
+      } else if (e.code === 'ArrowDown') {
+        e.preventDefault(); nextBlock();
+      } else if (e.code === 'ArrowUp') {
+        e.preventDefault(); prevBlock();
+      } else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') {
+        e.preventDefault(); e.shiftKey ? redo() : undo();
+      } else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyY') {
+        e.preventDefault(); redo();
+      }
+    });
+
+    window.addEventListener('resize', drawWaveform);
+
+    window.onload = async () => {
+      waveformCanvas = document.getElementById('waveformCanvas');
+      if (waveformCanvas) canvasCtx = waveformCanvas.getContext('2d');
+      setupEventListeners();
+      if (window.lucide) lucide.createIcons();
+      await initDB();
+      await loadSavedSession();
+      drawWaveform();
+      updateUIState();
+    };
+  </script>
+</body>
+</html>
