@@ -14,6 +14,6 @@ RE-record: Select any previous block and re-record it without messing up the res
 
 Keybaord shortcuts: WOW
 
-I think its working: autosave
+working: autosave
 
 <img width="2553" height="1271" alt="Screenshot 2026-09-28 144507" src="https://github.com/user-attachments/assets/61b2a1d0-7f25-4be1-a8fc-cb6fae6648df" />
