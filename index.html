@@ -74,10 +74,19 @@
           <option value="mp4" selected class="bg-slate-900 text-white">MP4 / WebM (Default)</option>
           <option value="wav" class="bg-slate-900 text-white">WAV Audio</option>
         </select>
-        <button id="btnExport" class="flex items-center space-x-1 px-3 py-1 bg-brand-600 hover:bg-brand-500 text-white rounded-md font-semibold transition-all shadow">
+        <button id="btnExport" class="flex items-center space-x-1 px-3 py-1 bg-brand-600 hover:bg-brand-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-md font-semibold transition-all shadow">
           <i data-lucide="download" class="w-3.5 h-3.5"></i>
           <span>Export</span>
         </button>
+      </div>
+      <div id="exportProgressWrap" class="hidden min-w-44 px-3 py-2 rounded-lg border border-cyan-500/30 bg-cyan-500/10">
+        <div class="flex items-center justify-between text-[11px] text-cyan-200 font-medium mb-1">
+          <span>Export Progress</span>
+          <span id="exportProgressText">0%</span>
+        </div>
+        <div class="h-1.5 bg-slate-900 rounded-full overflow-hidden">
+          <div id="exportProgressBar" class="h-full bg-cyan-400 transition-all duration-150" style="width: 0%;"></div>
+        </div>
       </div>
     </div>
   </header>
@@ -222,13 +231,20 @@
       <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-4">
         
         <!-- Essential Action Controls Grid -->
-        <div class="grid grid-cols-3 sm:grid-cols-7 gap-2">
+        <div class="grid grid-cols-3 sm:grid-cols-8 gap-2">
           
           <!-- Record / Stop Toggle -->
           <button id="btnRecord" class="flex flex-col items-center justify-center p-3 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-xl shadow-lg transition-all group cursor-pointer" title="Record and auto-advance">
             <div class="flex items-center space-x-1.5">
               <span id="recDot" class="w-2.5 h-2.5 rounded-full bg-white group-hover:scale-110"></span>
               <span id="lblRecord" class="text-xs">Record</span>
+            </div>
+          </button>
+
+          <button id="btnPauseRecord" disabled class="flex flex-col items-center justify-center p-3 bg-slate-800 border border-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-slate-400 font-bold rounded-xl transition-all cursor-pointer" title="Pause or resume recording">
+            <div class="flex items-center space-x-1.5">
+              <i id="iconPauseRecord" data-lucide="pause" class="w-4 h-4"></i>
+              <span id="lblPauseRecord" class="text-xs">Pause</span>
             </div>
           </button>
 
@@ -346,10 +362,13 @@
 
     let playheadTime = 0;
     let isRecording = false;
+    let isRecordingPaused = false;
     let activeRecordAction = null; // 'record' or 'rewrite'
     let mediaStream = null;
     let mediaRecorder = null;
     let recordedChunks = [];
+    let isExporting = false;
+    let exportProgressTimer = null;
 
     let isPlaying = false;
     let audioSourceNode = null;
@@ -657,6 +676,31 @@
       }
     }
 
+    function getFirstUnrecordedBlockIndex(startIndex = 0) {
+      if (scriptBlocks.length === 0) return -1;
+      const recordedBlockSet = new Set(blockClips.map(c => c.blockIndex));
+      const normalizedStart = Math.max(0, Math.min(startIndex, scriptBlocks.length - 1));
+
+      for (let i = normalizedStart; i < scriptBlocks.length; i++) {
+        if (!recordedBlockSet.has(i)) return i;
+      }
+      for (let i = 0; i < normalizedStart; i++) {
+        if (!recordedBlockSet.has(i)) return i;
+      }
+      return -1;
+    }
+
+    function setExportProgress(percentage, label = '', visible = true) {
+      const wrap = document.getElementById('exportProgressWrap');
+      const bar = document.getElementById('exportProgressBar');
+      const text = document.getElementById('exportProgressText');
+      if (!wrap || !bar || !text) return;
+      const bounded = Math.max(0, Math.min(100, Number.isFinite(percentage) ? percentage : 0));
+      bar.style.width = `${bounded}%`;
+      text.innerText = label || `${Math.round(bounded)}%`;
+      wrap.classList.toggle('hidden', !visible);
+    }
+
     async function startRecording() {
       initAudioContext();
       if (audioCtx.state === 'suspended') await audioCtx.resume();
@@ -687,6 +731,16 @@
         
         recordedChunks = [];
         mediaRecorder = new MediaRecorder(mediaStream);
+        isRecordingPaused = false;
+        
+        mediaRecorder.onpause = () => {
+          isRecordingPaused = true;
+          updateUIState();
+        };
+        mediaRecorder.onresume = () => {
+          isRecordingPaused = false;
+          updateUIState();
+        };
         
         mediaRecorder.ondataavailable = e => {
           if (e.data.size > 0) recordedChunks.push(e.data);
@@ -729,6 +783,7 @@
         
         mediaRecorder.start();
         isRecording = true;
+        isRecordingPaused = false;
         updateUIState();
         drawLiveRecording();
         showToast("Recording...", "info");
@@ -741,6 +796,7 @@
     function stopRecording() {
       if (!isRecording) return;
       isRecording = false;
+      isRecordingPaused = false;
       if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
       if (mediaStream) {
         mediaStream.getTracks().forEach(track => track.stop());
@@ -751,6 +807,17 @@
         animLiveFrameId = null;
       }
       updateUIState();
+    }
+
+    function togglePauseRecording() {
+      if (!isRecording || !mediaRecorder) return;
+      if (mediaRecorder.state === 'recording') {
+        mediaRecorder.pause();
+        showToast('Recording paused', 'info');
+      } else if (mediaRecorder.state === 'paused') {
+        mediaRecorder.resume();
+        showToast('Recording resumed', 'success');
+      }
     }
 
     function drawLiveRecording() {
@@ -1082,25 +1149,66 @@
     }
 
     async function exportMp4WebmFile() {
-      if (!mainAudioBuffer) return;
+      if (!mainAudioBuffer || isExporting) return;
       initAudioContext();
+      const btnExport = document.getElementById('btnExport');
+      const totalDuration = Math.max(0.1, mainAudioBuffer.duration || 0);
+      isExporting = true;
+      if (btnExport) btnExport.disabled = true;
+      setExportProgress(0, 'Preparing...', true);
       showToast("Preparing export...", "info");
-      const dest = audioCtx.createMediaStreamDestination();
-      let mimeType = MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4' : 'audio/webm;codecs=opus';
-      const recorder = new MediaRecorder(dest.stream, { mimeType });
-      const chunks = [];
-      recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-      recorder.onstop = () => {
-        const blob = new Blob(chunks, { type: mimeType });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a'); a.href = url;
-        a.download = `teleprompter_export.${mimeType.includes('mp4') ? 'mp4' : 'webm'}`; a.click();
-        showToast("Export completed!", "success");
-      };
-      const src = audioCtx.createBufferSource();
-      src.buffer = mainAudioBuffer; src.connect(dest);
-      recorder.start(); src.start(0);
-      src.onended = () => setTimeout(() => recorder.stop(), 100);
+
+      try {
+        const dest = audioCtx.createMediaStreamDestination();
+        let mimeType = MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4' : 'audio/webm;codecs=opus';
+        const recorder = new MediaRecorder(dest.stream, { mimeType });
+        const chunks = [];
+        const exportStart = performance.now();
+
+        recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+        recorder.onerror = () => {
+          if (exportProgressTimer) clearInterval(exportProgressTimer);
+          exportProgressTimer = null;
+          isExporting = false;
+          if (btnExport) btnExport.disabled = false;
+          setExportProgress(0, 'Failed', true);
+          setTimeout(() => setExportProgress(0, '', false), 1800);
+          showToast("Export failed", "error");
+        };
+        recorder.onstop = () => {
+          if (exportProgressTimer) clearInterval(exportProgressTimer);
+          exportProgressTimer = null;
+          const blob = new Blob(chunks, { type: mimeType });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a'); a.href = url;
+          a.download = `teleprompter_export.${mimeType.includes('mp4') ? 'mp4' : 'webm'}`; a.click();
+          setExportProgress(100, 'Done', true);
+          setTimeout(() => setExportProgress(0, '', false), 1800);
+          isExporting = false;
+          if (btnExport) btnExport.disabled = false;
+          showToast("Export completed!", "success");
+        };
+
+        exportProgressTimer = setInterval(() => {
+          const elapsed = (performance.now() - exportStart) / 1000;
+          const pct = Math.min(99, Math.round((elapsed / totalDuration) * 100));
+          setExportProgress(pct, `${pct}%`, true);
+        }, 150);
+
+        const src = audioCtx.createBufferSource();
+        src.buffer = mainAudioBuffer; src.connect(dest);
+        recorder.start(250);
+        src.start(0);
+        src.onended = () => setTimeout(() => recorder.stop(), 100);
+      } catch (err) {
+        if (exportProgressTimer) clearInterval(exportProgressTimer);
+        exportProgressTimer = null;
+        isExporting = false;
+        if (btnExport) btnExport.disabled = false;
+        setExportProgress(0, 'Failed', true);
+        setTimeout(() => setExportProgress(0, '', false), 1800);
+        showToast("Export failed", "error");
+      }
     }
 
     function resetProject() {
@@ -1204,6 +1312,7 @@
     function updateUIState() {
       const lblRecord = document.getElementById('lblRecord');
       const btnRecord = document.getElementById('btnRecord');
+      const btnPauseRecord = document.getElementById('btnPauseRecord');
       const btnRewrite = document.getElementById('btnRewrite');
       const recDot = document.getElementById('recDot');
       const btnPlayPause = document.getElementById('btnPlayPause');
@@ -1225,6 +1334,25 @@
         lblRecord.innerText = 'Record';
         btnRecord.className = 'flex flex-col items-center justify-center p-3 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-xl shadow-lg transition-all cursor-pointer group';
         recDot.className = 'w-2.5 h-2.5 rounded-full bg-white group-hover:scale-110';
+      }
+      
+      const lblPauseRecord = document.getElementById('lblPauseRecord');
+      const iconPauseRecord = document.getElementById('iconPauseRecord');
+      if (btnPauseRecord && lblPauseRecord && iconPauseRecord) {
+        btnPauseRecord.disabled = !isRecording;
+        if (!isRecording) {
+          lblPauseRecord.innerText = 'Pause';
+          iconPauseRecord.setAttribute('data-lucide', 'pause');
+          btnPauseRecord.className = 'flex flex-col items-center justify-center p-3 bg-slate-800 border border-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-slate-400 font-bold rounded-xl transition-all cursor-pointer';
+        } else if (isRecordingPaused) {
+          lblPauseRecord.innerText = 'Resume';
+          iconPauseRecord.setAttribute('data-lucide', 'play');
+          btnPauseRecord.className = 'flex flex-col items-center justify-center p-3 bg-emerald-700 hover:bg-emerald-600 text-white font-bold rounded-xl shadow transition-all cursor-pointer';
+        } else {
+          lblPauseRecord.innerText = 'Pause';
+          iconPauseRecord.setAttribute('data-lucide', 'pause');
+          btnPauseRecord.className = 'flex flex-col items-center justify-center p-3 bg-amber-700 hover:bg-amber-600 text-white font-bold rounded-xl shadow transition-all cursor-pointer';
+        }
       }
 
       btnRewrite.disabled = selectedBlockIndices.size !== 1;
@@ -1369,14 +1497,16 @@
             stopRecording();
         } else {
             activeRecordAction = 'record';
-            const hasAudio = blockClips.some(c => c.blockIndex === currentBlockIndex);
-            if (hasAudio) {
-                currentBlockIndex = scriptBlocks.length;
-                scriptBlocks.push("");
-                selectedBlockIndices.clear();
-                selectedBlockIndices.add(currentBlockIndex);
-                updateBlockView();
+            const targetBlockIndex = getFirstUnrecordedBlockIndex(currentBlockIndex);
+            if (targetBlockIndex >= 0) {
+              currentBlockIndex = targetBlockIndex;
+            } else {
+              currentBlockIndex = scriptBlocks.length;
+              scriptBlocks.push("");
             }
+            selectedBlockIndices.clear();
+            selectedBlockIndices.add(currentBlockIndex);
+            updateBlockView();
             startRecording();
         }
       });
@@ -1394,6 +1524,7 @@
       });
 
       document.getElementById('btnPlayPause')?.addEventListener('click', () => isPlaying ? stopAudio() : playAudio());
+      document.getElementById('btnPauseRecord')?.addEventListener('click', togglePauseRecording);
       document.getElementById('btnDeleteBlock')?.addEventListener('click', executeDeleteBlock);
       document.getElementById('btnUndo')?.addEventListener('click', undo);
       document.getElementById('btnRedo')?.addEventListener('click', redo);
